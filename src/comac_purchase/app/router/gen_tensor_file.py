@@ -839,7 +839,8 @@ async def get_tender_generation_stream(
             # 使用 get_response 进行流式返回
             async for chunk in session.get_response():
                 if chunk.delta_content:
-                    yield f"data: {json.dumps({'type': 'chunk', 'content': chunk.delta_content})}\n\n"
+                    # 包含 stream 属性，前端可以根据此属性决定是替换还是追加
+                    yield f"data: {json.dumps({'type': 'chunk', 'content': chunk.delta_content, 'stream': chunk.stream})}\n\n"
             
             # 发送完成状态
             # 重新查询以获取最新状态

@@ -30,6 +30,27 @@
           >
             初审
           </div>
+          <div
+            class="sidebar-item"
+            :class="{ active: activeTab === 'bid-review' }"
+            @click="activeTab = 'bid-review'"
+          >
+            初审结果展示
+          </div>
+          <div
+            class="sidebar-item under-construction"
+            :class="{ active: activeTab === 'competitive-negotiation' }"
+            @click="activeTab = 'competitive-negotiation'"
+          >
+            竞争性谈判
+          </div>
+          <div
+            class="sidebar-item under-construction"
+            :class="{ active: activeTab === 'supplier-analysis' }"
+            @click="activeTab = 'supplier-analysis'"
+          >
+            供应商智能分析
+          </div>
         </div>
         <div class="content-area">
           <!-- 详情Tab -->
@@ -308,6 +329,228 @@
             </div>
           </div>
 
+          <!-- 初审结果展示Tab -->
+          <div v-if="activeTab === 'bid-review'" class="bid-review-tab">
+            <div class="bid-review-header">
+              <div class="header-info">
+                <h2 class="page-title">初审结果展示</h2>
+                <p class="page-subtitle">全面审查供应商投标文件，确保采购质量</p>
+              </div>
+              <button 
+                class="refresh-btn-modern" 
+                @click="handleRefreshSuppliers"
+                :disabled="refreshingSuppliers"
+              >
+                <span class="refresh-icon">🔄</span>
+                {{ refreshingSuppliers ? '刷新中...' : '刷新数据' }}
+              </button>
+            </div>
+
+            <div v-if="bidRecords.length === 0" class="empty-state-modern">
+              <div class="empty-icon-large">📋</div>
+              <h3 class="empty-title">暂无供应商投标</h3>
+              <p class="empty-desc">请先在"详情"页面添加供应商并上传投标文件</p>
+            </div>
+
+            <div v-else class="bid-review-content">
+              <!-- 统计卡片 -->
+              <div class="stats-cards">
+                <div class="stat-card stat-total">
+                  <div class="stat-icon">📊</div>
+                  <div class="stat-info">
+                    <div class="stat-value">{{ bidRecords.length }}</div>
+                    <div class="stat-label">总供应商数</div>
+                  </div>
+                </div>
+                <div class="stat-card stat-reviewed">
+                  <div class="stat-icon">✅</div>
+                  <div class="stat-info">
+                    <div class="stat-value">{{ reviewedCount }}</div>
+                    <div class="stat-label">已评审</div>
+                  </div>
+                </div>
+                <div class="stat-card stat-pending">
+                  <div class="stat-icon">⏳</div>
+                  <div class="stat-info">
+                    <div class="stat-value">{{ pendingCount }}</div>
+                    <div class="stat-label">待评审</div>
+                  </div>
+                </div>
+                <div class="stat-card stat-passed">
+                  <div class="stat-icon">🎯</div>
+                  <div class="stat-info">
+                    <div class="stat-value">{{ passedCount }}</div>
+                    <div class="stat-label">已通过</div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 供应商评审列表 -->
+              <div class="review-list">
+                <div 
+                  v-for="bid in bidRecords" 
+                  :key="`review-${bid.bid_record_id || bid.project_id}-${bid.supplier_id || 'pending'}`"
+                  class="review-card"
+                  :class="{ 
+                    'review-card-selected': selectedReviewBid && selectedReviewBid.bid_record_id === bid.bid_record_id,
+                    'review-card-passed': getReviewStatus(bid) === 'passed',
+                    'review-card-failed': getReviewStatus(bid) === 'failed',
+                    'review-card-pending': getReviewStatus(bid) === 'pending'
+                  }"
+                  @click="handleSelectReviewBid(bid)"
+                >
+                  <div class="review-card-header">
+                    <div class="supplier-info">
+                      <div class="supplier-avatar">
+                        {{ (bid.supplier?.name || '未知供应商').charAt(0) }}
+                      </div>
+                      <div class="supplier-details">
+                        <h3 class="supplier-name">{{ bid.supplier?.name || '未知供应商' }}</h3>
+                        <p class="supplier-code">{{ bid.supplier?.registration_number || '暂无统一社会信用代码' }}</p>
+                      </div>
+                    </div>
+                    <div class="review-status-badge" :class="`status-${getReviewStatus(bid)}`">
+                      <span class="status-icon">{{ getReviewStatusIcon(getReviewStatus(bid)) }}</span>
+                      <span class="status-text">{{ getReviewStatusText(getReviewStatus(bid)) }}</span>
+                    </div>
+                  </div>
+                  
+                  <div class="review-card-body">
+                    <div class="review-meta">
+                      <div class="meta-item">
+                        <span class="meta-label">投标文件：</span>
+                        <span class="meta-value" :class="{ 'meta-missing': !bid.bid_document_file_id }">
+                          {{ bid.bid_document_file_id ? '已上传' : '未上传' }}
+                        </span>
+                      </div>
+                      <div class="meta-item">
+                        <span class="meta-label">评审结果：</span>
+                        <span class="meta-value">{{ getPreliminaryStatusText(bid) }}</span>
+                      </div>
+                    </div>
+                    <div v-if="getPreliminaryReason(bid)" class="review-reason-preview">
+                      <div class="reason-label">评审理由：</div>
+                      <div class="reason-text">{{ truncateText(getPreliminaryReason(bid), 80) }}</div>
+                    </div>
+                  </div>
+                  
+                  <div class="review-card-footer">
+                    <button 
+                      class="action-btn-view"
+                      @click.stop="handleViewBidDetail(bid)"
+                    >
+                      <span>查看详情</span>
+                    </button>
+                    <button 
+                      v-if="bid.bid_document_file_id"
+                      class="action-btn-ai"
+                      @click.stop="handleAiReviewClick(bid)"
+                    >
+                      <span>🤖 AI评审</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 评审详情面板 -->
+              <div v-if="selectedReviewBid" class="review-detail-panel">
+                <div class="panel-header">
+                  <h3 class="panel-title">
+                    <span class="panel-icon">📄</span>
+                    评审详情
+                  </h3>
+                  <button class="panel-close" @click="selectedReviewBid = null">×</button>
+                </div>
+                <div class="panel-body">
+                  <div class="detail-section-modern">
+                    <div class="detail-item">
+                      <label class="detail-label">供应商名称</label>
+                      <div class="detail-value">{{ selectedReviewBid.supplier?.name || '未知供应商' }}</div>
+                    </div>
+                    <div class="detail-item">
+                      <label class="detail-label">统一社会信用代码</label>
+                      <div class="detail-value">{{ selectedReviewBid.supplier?.registration_number || '暂无' }}</div>
+                    </div>
+                    <div class="detail-item">
+                      <label class="detail-label">评审状态</label>
+                      <div class="detail-value">
+                        <span class="status-badge-modern" :class="`status-${getReviewStatus(selectedReviewBid)}`">
+                          {{ getReviewStatusText(getReviewStatus(selectedReviewBid)) }}
+                        </span>
+                      </div>
+                    </div>
+                    <div class="detail-item">
+                      <label class="detail-label">评审结果</label>
+                      <div class="detail-value">
+                        <select
+                          v-model="reviewStatusEdit"
+                          class="status-select-modern"
+                        >
+                          <option value="null">未开始</option>
+                          <option value="true">通过</option>
+                          <option value="false">不通过</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div class="detail-item detail-item-full">
+                      <label class="detail-label">评审理由</label>
+                      <textarea
+                        v-model="reviewReasonEdit"
+                        rows="6"
+                        placeholder="请输入评审理由..."
+                        class="reason-textarea-modern"
+                      ></textarea>
+                    </div>
+                    <div class="detail-item detail-item-full">
+                      <label class="detail-label">投标文件内容</label>
+                      <div class="bid-file-viewer">
+                        <div v-if="loadingReviewBidFile" class="loading-modern">
+                          <div class="loading-spinner"></div>
+                          <span>加载中...</span>
+                        </div>
+                        <textarea
+                          v-else
+                          :value="reviewBidFileContent"
+                          readonly
+                          rows="12"
+                          class="bid-file-textarea-modern"
+                          placeholder="暂无投标文件内容"
+                        ></textarea>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="panel-actions">
+                    <button 
+                      class="btn-save"
+                      @click="handleSaveReview"
+                      :disabled="savingReview"
+                    >
+                      {{ savingReview ? '保存中...' : '保存评审结果' }}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 竞争性谈判Tab -->
+          <div v-if="activeTab === 'competitive-negotiation'" class="competitive-negotiation-tab">
+            <div class="under-construction-state">
+              <div class="construction-icon">🚧</div>
+              <h2 class="construction-title">功能建设中</h2>
+              <p class="construction-desc">竞争性谈判功能正在开发中，敬请期待</p>
+            </div>
+          </div>
+
+          <!-- 供应商智能分析Tab -->
+          <div v-if="activeTab === 'supplier-analysis'" class="supplier-analysis-tab">
+            <div class="under-construction-state">
+              <div class="construction-icon">🚧</div>
+              <h2 class="construction-title">功能建设中</h2>
+              <p class="construction-desc">供应商智能分析功能正在开发中，敬请期待</p>
+            </div>
+          </div>
+
           <!-- 初审Tab -->
           <div v-if="activeTab === 'preliminary'" class="preliminary-tab">
             <div class="detail-section">
@@ -505,7 +748,7 @@
 </template>
 
 <script>
-import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
+import { ref, onMounted, onUnmounted, computed, watch, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { getProjectDetail, getFileContent, uploadProjectDocuments, downloadFile, renameProjectTitle } from '../api/project'
 import { getBidRecords, updateBidRecord } from '../api/bid'
@@ -535,6 +778,12 @@ export default {
     const activeTab = ref('detail')
     const bidRecords = ref([])
     const selectedBidRecord = ref(null)
+    const selectedReviewBid = ref(null)
+    const reviewStatusEdit = ref('null')
+    const reviewReasonEdit = ref('')
+    const reviewBidFileContent = ref('')
+    const loadingReviewBidFile = ref(false)
+    const savingReview = ref(false)
     const aiPreliminaryReviewing = ref(false)
     const singleAiPreliminaryReviewing = ref(false)
     const aiPreliminaryStatus = ref(null)
@@ -1706,6 +1955,7 @@ export default {
         const reader = response.body.getReader()
         const decoder = new TextDecoder()
         let buffer = ''
+        let isFirstChunk = true // 标记是否是第一个chunk
         
         while (true) {
           const { done, value } = await reader.read()
@@ -1721,9 +1971,24 @@ export default {
                 const data = JSON.parse(line.slice(6))
                 
                 if (data.type === 'chunk' && data.content) {
-                  // 实时追加内容
-                  detailContent.value += data.content
+                  // 根据 stream 属性决定是替换还是追加
+                  // stream=false 表示完整内容，应该替换；stream=true 表示增量内容，应该追加
+                  // 如果是第一个chunk且stream=false，则替换；否则追加
+                  // 向后兼容：如果 stream 属性未定义，默认当作增量内容处理（追加）
+                  if (isFirstChunk && data.stream === false) {
+                    // 第一个完整内容的chunk，替换而不是追加
+                    detailContent.value = data.content
+                    isFirstChunk = false
+                  } else {
+                    // 增量内容，追加
+                    detailContent.value += data.content
+                    isFirstChunk = false
+                  }
                   loadingDetail.value = false // 有内容后就不再显示loading
+                  
+                  // 自动滚动到底部
+                  await nextTick()
+                  scrollDetailToBottom()
                 } else if (data.type === 'content' && data.content) {
                   // 完整内容
                   detailContent.value = data.content
@@ -1732,6 +1997,9 @@ export default {
                     // 生成完成，刷新列表
                     await fetchTenderGenerationList()
                   }
+                  // 自动滚动到底部
+                  await nextTick()
+                  scrollDetailToBottom()
                 } else if (data.type === 'status') {
                   if (data.status === 'finished') {
                     // 生成完成，重新获取文件内容
@@ -1747,6 +2015,9 @@ export default {
                       try {
                         const fileData = await getFileContent(updatedItem.file_id)
                         detailContent.value = fileData.content || fileData || ''
+                        // 自动滚动到底部
+                        await nextTick()
+                        scrollDetailToBottom()
                       } catch (err) {
                         console.error('Failed to load finished content:', err)
                       }
@@ -1774,8 +2045,18 @@ export default {
             try {
               const data = JSON.parse(buffer.slice(6))
               if (data.type === 'chunk' && data.content) {
-                detailContent.value += data.content
+                // 向后兼容：如果 stream 属性未定义，默认当作增量内容处理（追加）
+                if (isFirstChunk && data.stream === false) {
+                  detailContent.value = data.content
+                  isFirstChunk = false
+                } else {
+                  detailContent.value += data.content
+                  isFirstChunk = false
+                }
                 loadingDetail.value = false
+                // 自动滚动到底部
+                await nextTick()
+                scrollDetailToBottom()
               }
             } catch (e) {
               console.error('Failed to parse remaining buffer:', e)
@@ -1787,6 +2068,20 @@ export default {
         loadingDetail.value = false
         alert('加载详情失败: ' + (err.message || '未知错误'))
       }
+    }
+    
+    // 滚动详情到底部
+    const scrollDetailToBottom = () => {
+      // 使用 requestAnimationFrame 确保 DOM 更新后再滚动
+      requestAnimationFrame(() => {
+        const dialogBody = document.querySelector('.detail-dialog .dialog-body')
+        if (dialogBody) {
+          const documentContent = dialogBody.querySelector('.document-content')
+          if (documentContent) {
+            documentContent.scrollTop = documentContent.scrollHeight
+          }
+        }
+      })
     }
 
     // 使用生成的文件
@@ -1840,6 +2135,213 @@ export default {
       } catch (err) {
         console.error('Failed to delete generation:', err)
         alert(err.response?.data?.detail || err.message || '删除失败')
+      }
+    }
+
+    // 标书评审相关函数
+    const reviewedCount = computed(() => {
+      return bidRecords.value.filter(bid => {
+        const status = getReviewStatus(bid)
+        return status === 'passed' || status === 'failed'
+      }).length
+    })
+
+    const pendingCount = computed(() => {
+      return bidRecords.value.filter(bid => getReviewStatus(bid) === 'pending').length
+    })
+
+    const passedCount = computed(() => {
+      return bidRecords.value.filter(bid => getReviewStatus(bid) === 'passed').length
+    })
+
+    const getReviewStatus = (bid) => {
+      const preliminaryReview = bid.preliminary_review
+      if (preliminaryReview) {
+        let reviewData = preliminaryReview
+        if (typeof preliminaryReview === 'string') {
+          try {
+            reviewData = JSON.parse(preliminaryReview)
+          } catch (e) {
+            return 'pending'
+          }
+        }
+        if (reviewData && typeof reviewData.pass !== 'undefined') {
+          return reviewData.pass === true ? 'passed' : 'failed'
+        }
+      }
+      
+      const aiReview = bid.ai_preliminary_review
+      if (aiReview) {
+        let reviewData = aiReview
+        if (typeof aiReview === 'string') {
+          try {
+            reviewData = JSON.parse(aiReview)
+          } catch (e) {
+            return 'pending'
+          }
+        }
+        if (reviewData && typeof reviewData.pass !== 'undefined') {
+          const passValue = reviewData.pass
+          if (passValue === true || passValue === 'true' || passValue === 'True') {
+            return 'passed'
+          } else if (passValue === false || passValue === 'false' || passValue === 'False') {
+            return 'failed'
+          }
+        }
+      }
+      
+      return 'pending'
+    }
+
+    const getReviewStatusText = (status) => {
+      const statusMap = {
+        'passed': '已通过',
+        'failed': '未通过',
+        'pending': '待评审'
+      }
+      return statusMap[status] || '未知'
+    }
+
+    const getReviewStatusIcon = (status) => {
+      const iconMap = {
+        'passed': '✅',
+        'failed': '❌',
+        'pending': '⏳'
+      }
+      return iconMap[status] || '❓'
+    }
+
+    const truncateText = (text, maxLength) => {
+      if (!text) return ''
+      return text.length > maxLength ? text.substring(0, maxLength) + '...' : text
+    }
+
+    const handleSelectReviewBid = async (bid) => {
+      selectedReviewBid.value = bid
+      reviewReasonEdit.value = getPreliminaryReason(bid) || ''
+      
+      const preliminaryReview = bid.preliminary_review
+      if (preliminaryReview) {
+        let reviewData = preliminaryReview
+        if (typeof preliminaryReview === 'string') {
+          try {
+            reviewData = JSON.parse(preliminaryReview)
+          } catch (e) {
+            reviewStatusEdit.value = 'null'
+          }
+        }
+        if (reviewData && typeof reviewData.pass !== 'undefined') {
+          reviewStatusEdit.value = reviewData.pass === true ? 'true' : (reviewData.pass === false ? 'false' : 'null')
+        } else {
+          reviewStatusEdit.value = 'null'
+        }
+      } else {
+        const aiReview = bid.ai_preliminary_review
+        if (aiReview) {
+          let reviewData = aiReview
+          if (typeof aiReview === 'string') {
+            try {
+              reviewData = JSON.parse(aiReview)
+            } catch (e) {
+              reviewStatusEdit.value = 'null'
+            }
+          }
+          if (reviewData && typeof reviewData.pass !== 'undefined') {
+            const passValue = reviewData.pass
+            if (passValue === true || passValue === 'true' || passValue === 'True') {
+              reviewStatusEdit.value = 'true'
+            } else if (passValue === false || passValue === 'false' || passValue === 'False') {
+              reviewStatusEdit.value = 'false'
+            } else {
+              reviewStatusEdit.value = 'null'
+            }
+          } else {
+            reviewStatusEdit.value = 'null'
+          }
+        } else {
+          reviewStatusEdit.value = 'null'
+        }
+      }
+      
+      // 加载投标文件内容
+      if (bid.bid_document_file_id) {
+        await fetchReviewBidFileContent(bid)
+      } else {
+        reviewBidFileContent.value = ''
+      }
+    }
+
+    const fetchReviewBidFileContent = async (bid) => {
+      if (!bid || !bid.bid_document_file_id) {
+        reviewBidFileContent.value = ''
+        return
+      }
+      
+      try {
+        loadingReviewBidFile.value = true
+        const data = await getFileContent(bid.bid_document_file_id)
+        reviewBidFileContent.value = data.content || data || ''
+      } catch (err) {
+        console.error('Failed to fetch review bid file content:', err)
+        reviewBidFileContent.value = ''
+      } finally {
+        loadingReviewBidFile.value = false
+      }
+    }
+
+    const handleViewBidDetail = (bid) => {
+      // 切换到初审tab并选中该供应商
+      activeTab.value = 'preliminary'
+      handleSelectBidRecord(bid)
+    }
+
+    const handleAiReviewClick = (bid) => {
+      handleAiPreliminaryClick(bid)
+    }
+
+    const handleSaveReview = async () => {
+      if (!selectedReviewBid.value) return
+      
+      const reason = reviewReasonEdit.value?.trim() || ''
+      const statusValue = reviewStatusEdit.value === 'null' ? null : reviewStatusEdit.value === 'true'
+      
+      let preliminaryReviewValue = null
+      if (statusValue !== null || reason) {
+        preliminaryReviewValue = {
+          pass: statusValue,
+          reason: reason
+        }
+      }
+      
+      try {
+        savingReview.value = true
+        const bid = selectedReviewBid.value
+        await updateBidRecord(bid.project_id, bid.supplier?.id || bid.supplier_id, {
+          preliminary_review: preliminaryReviewValue
+        })
+        
+        await fetchBidRecords()
+        
+        const refreshed = bidRecords.value.find(
+          (item) => item.bid_record_id === bid.bid_record_id
+        )
+        if (refreshed) {
+          selectedReviewBid.value = refreshed
+          reviewReasonEdit.value = getPreliminaryReason(refreshed) || ''
+          const preliminaryReview = refreshed.preliminary_review
+          if (preliminaryReview && typeof preliminaryReview.pass !== 'undefined') {
+            const status = preliminaryReview.pass
+            reviewStatusEdit.value = status === true ? 'true' : (status === false ? 'false' : 'null')
+          } else {
+            reviewStatusEdit.value = 'null'
+          }
+        }
+        
+        showNotification('评审结果已保存', 'success')
+      } catch (err) {
+        showNotification(err.response?.data?.detail || err.message || '保存失败', 'error')
+      } finally {
+        savingReview.value = false
       }
     }
 
@@ -2053,7 +2555,25 @@ export default {
       notification,
       handleDownloadGeneration,
       handleUseGeneration,
-      handleDeleteGeneration
+      handleDeleteGeneration,
+      // 标书评审相关
+      selectedReviewBid,
+      reviewStatusEdit,
+      reviewReasonEdit,
+      reviewBidFileContent,
+      loadingReviewBidFile,
+      savingReview,
+      reviewedCount,
+      pendingCount,
+      passedCount,
+      getReviewStatus,
+      getReviewStatusText,
+      getReviewStatusIcon,
+      truncateText,
+      handleSelectReviewBid,
+      handleViewBidDetail,
+      handleAiReviewClick,
+      handleSaveReview
     }
   },
   watch: {
@@ -2070,6 +2590,11 @@ export default {
         }
       } else if (newVal === 'generate') {
         this.fetchTenderGenerationList()
+      } else if (newVal === 'bid-review') {
+        // 切换到标书评审时，如果已选中供应商，加载其文件内容
+        if (this.selectedReviewBid && this.selectedReviewBid.bid_document_file_id) {
+          this.fetchReviewBidFileContent(this.selectedReviewBid)
+        }
       }
     }
   }
@@ -2131,7 +2656,7 @@ export default {
 }
 
 .sidebar {
-  width: 200px;
+  width: 240px;
   background: white;
   border-radius: 8px;
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.1);
@@ -2140,12 +2665,16 @@ export default {
 }
 
 .sidebar-item {
-  padding: 16px 24px;
+  padding: 16px 20px;
   cursor: pointer;
-  font-size: 16px;
-  color: var(--text-secondary);
+  font-size: 15px;
+  color: #1f2937;
   transition: all 0.3s;
   border-left: 3px solid transparent;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 500;
 }
 
 .sidebar-item:hover {
@@ -2158,6 +2687,25 @@ export default {
   background-color: #f0f9ff;
   border-left-color: var(--primary-color);
   font-weight: 600;
+}
+
+.sidebar-item.under-construction {
+  color: #9ca3af;
+  opacity: 0.6;
+}
+
+.sidebar-item.under-construction:hover {
+  color: #6b7280;
+  background-color: #f9fafb;
+  opacity: 0.8;
+}
+
+.sidebar-item.under-construction.active {
+  color: #9ca3af;
+  background-color: #f9fafb;
+  border-left-color: #d1d5db;
+  opacity: 0.7;
+  font-weight: 500;
 }
 
 .content-area {
@@ -2883,6 +3431,58 @@ export default {
 }
 
 /* 初审 Tab 样式 */
+.competitive-negotiation-tab {
+  height: 100%;
+}
+
+.supplier-analysis-tab {
+  height: 100%;
+}
+
+.under-construction-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 500px;
+  text-align: center;
+  padding: 80px 20px;
+  background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+  border-radius: 16px;
+}
+
+.construction-icon {
+  font-size: 80px;
+  margin-bottom: 24px;
+  opacity: 0.8;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 0.8;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.05);
+  }
+}
+
+.construction-title {
+  font-size: 28px;
+  font-weight: 600;
+  color: #374151;
+  margin: 0 0 16px 0;
+}
+
+.construction-desc {
+  font-size: 16px;
+  color: #6b7280;
+  margin: 0;
+  line-height: 1.6;
+}
+
 .preliminary-tab {
   height: 100%;
 }
@@ -3181,5 +3781,638 @@ export default {
 .status-summary .status-pending {
   color: var(--text-secondary);
   background-color: #f5f7fa;
+}
+
+/* 标书评审 Tab 样式 */
+.bid-review-tab {
+  height: 100%;
+}
+
+.bid-review-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 32px;
+  padding-bottom: 24px;
+  border-bottom: 2px solid #e5e7eb;
+}
+
+.header-info {
+  flex: 1;
+}
+
+.page-title {
+  font-size: 28px;
+  font-weight: 700;
+  color: #1f2937;
+  margin: 0 0 8px 0;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.page-subtitle {
+  font-size: 15px;
+  color: #6b7280;
+  margin: 0;
+  line-height: 1.6;
+}
+
+.refresh-btn-modern {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+}
+
+.refresh-btn-modern:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+}
+
+.refresh-btn-modern:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.refresh-icon {
+  font-size: 16px;
+  animation: spin 2s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.empty-state-modern {
+  text-align: center;
+  padding: 80px 20px;
+  background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+  border-radius: 16px;
+  margin-top: 40px;
+}
+
+.empty-icon-large {
+  font-size: 80px;
+  margin-bottom: 24px;
+  opacity: 0.6;
+}
+
+.empty-title {
+  font-size: 24px;
+  font-weight: 600;
+  color: #374151;
+  margin: 0 0 12px 0;
+}
+
+.empty-desc {
+  font-size: 16px;
+  color: #6b7280;
+  margin: 0;
+}
+
+.bid-review-content {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+/* 统计卡片 */
+.stats-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 20px;
+  margin-bottom: 8px;
+}
+
+.stat-card {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 24px;
+  background: white;
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  transition: all 0.3s ease;
+  border: 2px solid transparent;
+}
+
+.stat-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+}
+
+.stat-card.stat-total {
+  border-left: 4px solid #667eea;
+}
+
+.stat-card.stat-reviewed {
+  border-left: 4px solid #10b981;
+}
+
+.stat-card.stat-pending {
+  border-left: 4px solid #f59e0b;
+}
+
+.stat-card.stat-passed {
+  border-left: 4px solid #3b82f6;
+}
+
+.stat-icon {
+  font-size: 36px;
+  opacity: 0.8;
+}
+
+.stat-info {
+  flex: 1;
+}
+
+.stat-value {
+  font-size: 32px;
+  font-weight: 700;
+  color: #1f2937;
+  line-height: 1;
+  margin-bottom: 4px;
+}
+
+.stat-label {
+  font-size: 14px;
+  color: #6b7280;
+  font-weight: 500;
+}
+
+/* 评审列表 */
+.review-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+  gap: 20px;
+}
+
+.review-card {
+  background: white;
+  border-radius: 12px;
+  padding: 20px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  transition: all 0.3s ease;
+  cursor: pointer;
+  border: 2px solid transparent;
+  position: relative;
+  overflow: hidden;
+}
+
+.review-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 4px;
+  background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+  transform: scaleX(0);
+  transition: transform 0.3s ease;
+}
+
+.review-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  border-color: #e5e7eb;
+}
+
+.review-card:hover::before {
+  transform: scaleX(1);
+}
+
+.review-card-selected {
+  border-color: #667eea;
+  box-shadow: 0 4px 16px rgba(102, 126, 234, 0.2);
+}
+
+.review-card-selected::before {
+  transform: scaleX(1);
+}
+
+.review-card-passed {
+  border-left: 4px solid #10b981;
+}
+
+.review-card-failed {
+  border-left: 4px solid #ef4444;
+}
+
+.review-card-pending {
+  border-left: 4px solid #f59e0b;
+}
+
+.review-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 16px;
+}
+
+.supplier-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+}
+
+.supplier-avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.supplier-details {
+  flex: 1;
+  min-width: 0;
+}
+
+.supplier-name {
+  font-size: 18px;
+  font-weight: 600;
+  color: #1f2937;
+  margin: 0 0 4px 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.supplier-code {
+  font-size: 13px;
+  color: #6b7280;
+  margin: 0;
+  word-break: break-all;
+  line-height: 1.4;
+}
+
+.review-status-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.review-status-badge.status-passed {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.review-status-badge.status-failed {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.review-status-badge.status-pending {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.status-icon {
+  font-size: 14px;
+}
+
+.review-card-body {
+  margin-bottom: 16px;
+}
+
+.review-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.meta-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.meta-label {
+  color: #6b7280;
+  font-weight: 500;
+}
+
+.meta-value {
+  color: #1f2937;
+  font-weight: 500;
+}
+
+.meta-missing {
+  color: #ef4444;
+}
+
+.review-reason-preview {
+  padding: 12px;
+  background: #f9fafb;
+  border-radius: 8px;
+  border-left: 3px solid #e5e7eb;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.reason-label {
+  font-size: 13px;
+  color: #6b7280;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.reason-text {
+  font-size: 13px;
+  color: #374151;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: break-word;
+}
+
+.review-card-footer {
+  display: flex;
+  gap: 8px;
+  padding-top: 16px;
+  border-top: 1px solid #e5e7eb;
+}
+
+.action-btn-view,
+.action-btn-ai {
+  flex: 1;
+  padding: 8px 16px;
+  border: none;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.action-btn-view {
+  background: #f3f4f6;
+  color: #374151;
+}
+
+.action-btn-view:hover {
+  background: #e5e7eb;
+}
+
+.action-btn-ai {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+}
+
+.action-btn-ai:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+}
+
+/* 评审详情面板 */
+.review-detail-panel {
+  background: white;
+  border-radius: 16px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.1);
+  border: 2px solid #e5e7eb;
+  overflow: hidden;
+  margin-top: 24px;
+}
+
+.panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 20px 24px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+}
+
+.panel-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 20px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.panel-icon {
+  font-size: 24px;
+}
+
+.panel-close {
+  background: rgba(255, 255, 255, 0.2);
+  border: none;
+  color: white;
+  font-size: 28px;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.3s ease;
+}
+
+.panel-close:hover {
+  background: rgba(255, 255, 255, 0.3);
+  transform: rotate(90deg);
+}
+
+.panel-body {
+  padding: 24px;
+}
+
+.detail-section-modern {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.detail-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.detail-item-full {
+  grid-column: 1 / -1;
+}
+
+.detail-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: #374151;
+}
+
+.detail-value {
+  font-size: 15px;
+  color: #1f2937;
+}
+
+.status-badge-modern {
+  display: inline-block;
+  padding: 6px 14px;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.status-badge-modern.status-passed {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.status-badge-modern.status-failed {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.status-badge-modern.status-pending {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.status-select-modern {
+  padding: 10px 14px;
+  border: 2px solid #e5e7eb;
+  border-radius: 8px;
+  font-size: 14px;
+  background: white;
+  color: #1f2937;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  width: 200px;
+}
+
+.status-select-modern:hover {
+  border-color: #667eea;
+}
+
+.status-select-modern:focus {
+  outline: none;
+  border-color: #667eea;
+  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+}
+
+.reason-textarea-modern {
+  width: 100%;
+  padding: 12px;
+  border: 2px solid #e5e7eb;
+  border-radius: 8px;
+  font-size: 14px;
+  font-family: inherit;
+  resize: vertical;
+  transition: all 0.3s ease;
+  background: #f9fafb;
+}
+
+.reason-textarea-modern:focus {
+  outline: none;
+  border-color: #667eea;
+  background: white;
+  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+}
+
+.bid-file-viewer {
+  border: 2px solid #e5e7eb;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #f9fafb;
+}
+
+.loading-modern {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  gap: 12px;
+  color: #6b7280;
+}
+
+.loading-spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid #e5e7eb;
+  border-top-color: #667eea;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+.bid-file-textarea-modern {
+  width: 100%;
+  padding: 16px;
+  border: none;
+  font-size: 13px;
+  font-family: 'Courier New', monospace;
+  resize: vertical;
+  background: #f9fafb;
+  color: #1f2937;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+.bid-file-textarea-modern:focus {
+  outline: none;
+  background: white;
+}
+
+.panel-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 24px;
+  border-top: 2px solid #e5e7eb;
+  margin-top: 24px;
+}
+
+.btn-save {
+  padding: 12px 32px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+}
+
+.btn-save:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+}
+
+.btn-save:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
 }
 </style>
