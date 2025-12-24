@@ -665,7 +665,8 @@ class LLMSessionManager:
         self,
         messages: List[Dict[str, str]],
         model: str = "deepseek-ai/DeepSeek-V3.2-Exp",
-        description: Optional[Dict[str, Any]] = None
+        description: Optional[Dict[str, Any]] = None,
+        **kwargs
     ) -> str:
         """
         异步创建并运行会话（不等待完成）
@@ -674,6 +675,7 @@ class LLMSessionManager:
             messages: 消息列表
             model: 模型名称
             description: 会话描述
+            **kwargs: 其他 OpenAI API 参数（如 temperature）
             
         Returns:
             session_id: 会话 ID
@@ -684,7 +686,7 @@ class LLMSessionManager:
         # 在后台任务中运行会话，不等待完成
         async def _run_in_background():
             try:
-                await session.run(messages=messages, model=model)
+                await session.run(messages=messages, model=model, **kwargs)
             except Exception as e:
                 print(f"后台运行会话失败: {str(e)}")
         

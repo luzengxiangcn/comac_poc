@@ -127,10 +127,12 @@ async def _process_single_bid_record_async(
 - 是否逐条（或在逻辑上）覆盖了采购征询文件中的主要技术要求、商务条款和服务承诺
 - 是否缺失关键章节或关键条款（例如：技术方案、报价说明、交付计划、售后服务等）
 - 是否存在明显的空白、引用错误模板、与本项目无关的大段内容等情况
+- 有章节缺失，重要内容缺失则不通过
+- 只判断是否完整响应了采购征询文件中的要求，不需要做技术优劣或商务优劣的评价。
 
 请综合上述情况，给出你的结论，并严格按照下面 JSON 格式输出（不要包含任何多余文字）：
 {{
-  "reason": "简要说明通过/不通过的理由，50~200字左右，必须是中文",
+  "reason": "先逐一校验章节，然后说明通过/不通过的理由。必须中文。",
   "pass": true 或 false   // true 表示内容基本完整，可以进入后续人工评审；false 表示内容明显不完整
 }}
 
@@ -153,7 +155,7 @@ async def _process_single_bid_record_async(
         messages = [
             {
                 "role": "system",
-                "content": "你是一名严谨的采购评审专家，主要负责根据采购征询文件检查投标文件内容是否完整。",
+                "content": "你是一名严谨的采购评审专家，主要负责根据采购征询文件检查投标文件内容是否完整。如果有章节级别的确实，关键内容确实，判定为不通过",
             },
             {
                 "role": "user",
@@ -163,8 +165,13 @@ async def _process_single_bid_record_async(
 
         session_id = await manager.create_and_run_session(
             messages=messages,
-            model="deepseek-ai/DeepSeek-V3.2-Exp",
+            model="Pro/deepseek-ai/DeepSeek-V3.1-Terminus",
             description=description,
+            temperature=0,
+            extra_body={
+                "enable_thinking": True,
+                "thinking_budget": 4096,
+            },
         )
 
         # 写入 model_session 字段
@@ -431,9 +438,9 @@ async def _run_ai_preliminary_review_task(
     "/ai-preliminary-review",
     summary="触发单个供应商投标记录的 AI 初审",
     description=(
-        "输入项目 ID 和供应商 ID，检查前置条件（项目已有采购征询文件、投标文件存在、"
-        "且当前没有 AI 初审/会话进行中），然后调用大模型对投标文件内容完整性进行检查，"
-        "返回 {\"reason\": 原因, \"pass\": true/false}。"
+        "输入项目 ID 和供应商 ID，检查前置条件（项目已有采购征询文件、投标文件存在），"
+        "然后调用大模型对投标文件内容完整性进行检查，返回 {\"reason\": 原因, \"pass\": true/false}。"
+        "如果已有AI初评结果，会先清空后重新评审；如果正在处理中，则不允许重复触发。"
     ),
 )
 async def ai_preliminary_review(
@@ -446,7 +453,8 @@ async def ai_preliminary_review(
     1. 检查前置条件：
        - 项目存在，且已有采购征询文件（tender_document_file_id 不为空）
        - 投标记录存在，且有投标文件（bid_document_file_id 不为空）
-       - 当前投标记录的 ai_preliminary_review、ai_preliminary_review_model_session 为空
+       - 如果正在处理中（ai_preliminary_review_model_session 不为空），则不允许重复触发
+       - 如果已有AI初评结果（ai_preliminary_review 不为空），会先清空后重新评审
     2. 构建 prompt，要求大模型输出 {"reason": "...", "pass": true/false}
     3. 使用 model_session_manager 创建会话，并等待执行完成
     4. 将结果写入投标记录，并清空 ai_preliminary_review_model_session 字段
@@ -486,11 +494,23 @@ async def ai_preliminary_review(
             detail="该供应商尚无投标文件，无法进行 AI 初审",
         )
 
-    if bid_record.ai_preliminary_review_model_session or bid_record.ai_preliminary_review:
+    # 如果正在处理中（有会话ID），不允许重复触发
+    if bid_record.ai_preliminary_review_model_session:
         raise HTTPException(
             status_code=400,
-            detail="该投标记录已存在 AI 初审结果或正在处理中，请勿重复触发",
+            detail="该投标记录正在处理中，请等待完成后再试",
         )
+
+    # 如果已有AI初评结果，先清空后重新评审（支持重新评审功能）
+    if bid_record.ai_preliminary_review:
+        logger.info(
+            f"[AI初审触发] 投标记录 {bid_record.id} 已有AI初评结果，"
+            "将清空后重新评审"
+        )
+        bid_record.ai_preliminary_review = None
+        bid_record.ai_preliminary_review_success = None
+        db.commit()
+        db.refresh(bid_record)
 
     # 3. 读取采购征询文件和投标文件内容（Markdown）
     tender_file = (
@@ -539,8 +559,8 @@ async def ai_preliminary_review(
     )
 
     # 4. 构建 Prompt
-    prompt = f"""你是一名资深的采购评审专家，现在需要从“内容完整性”的角度，
-对某个供应商的投标文件进行快速“AI 初审”，只判断是否完整响应了采购征询文件中的要求，
+    prompt = f"""你是一名资深的采购评审专家，现在需要从"内容完整性"的角度，
+对某个供应商的投标文件进行快速"AI 初审"，只判断是否完整响应了采购征询文件中的要求，
 不需要做技术优劣或商务优劣的评价。
 
 请对比以下两部分内容：
@@ -551,10 +571,12 @@ async def ai_preliminary_review(
 【二、该供应商的投标文件（节选）】
 {bid_md_limited}
 
-请你重点从以下方面判断投标文件是否“内容完整”：
+请你重点从以下方面判断投标文件是否"内容完整"：
 - 是否逐条（或在逻辑上）覆盖了采购征询文件中的主要技术要求、商务条款和服务承诺
 - 是否缺失关键章节或关键条款（例如：技术方案、报价说明、交付计划、售后服务等）
 - 是否存在明显的空白、引用错误模板、与本项目无关的大段内容等情况
+- 有章节缺失，重要内容缺失则不通过
+- 只判断是否完整响应了采购征询文件中的要求，不需要做技术优劣或商务优劣的评价。
 
 请综合上述情况，给出你的结论，并严格按照下面 JSON 格式输出（不要包含任何多余文字）：
 {{
@@ -592,8 +614,13 @@ async def ai_preliminary_review(
     try:
         session_id = await manager.create_and_run_session(
             messages=messages,
-            model="deepseek-ai/DeepSeek-V3.2-Exp",
+            model="Pro/deepseek-ai/DeepSeek-V3.1-Terminus",
             description=description,
+            temperature=0,
+            extra_body={
+                "enable_thinking": True,
+                "thinking_budget": 4096,
+            },
         )
     except Exception as e:
         raise HTTPException(
@@ -801,22 +828,30 @@ async def _batch_ai_preliminary_review_task(project_id: int):
         # 筛选需要处理的记录
         tasks = []
         for bid_record in bid_records:
-            # 过滤条件：必须有投标文件，且当前无 AI 初审结果和会话
+            # 过滤条件：必须有投标文件
             if not bid_record.bid_document_file_id:
                 logger.info(
                     f"[批量AI初评任务] 跳过投标记录 {bid_record.id}: 没有投标文件"
                 )
                 continue
 
-            if (
-                bid_record.ai_preliminary_review
-                or bid_record.ai_preliminary_review_model_session
-            ):
+            # 如果有正在处理的会话，跳过（避免重复处理）
+            if bid_record.ai_preliminary_review_model_session:
                 logger.info(
                     f"[批量AI初评任务] 跳过投标记录 {bid_record.id}: "
-                    "已存在AI初评结果或正在处理中"
+                    "正在处理中，避免重复处理"
                 )
                 continue
+
+            # 如果有已有的AI初评结果，先清空（实现重新评审功能）
+            if bid_record.ai_preliminary_review:
+                logger.info(
+                    f"[批量AI初评任务] 投标记录 {bid_record.id} 已有AI初评结果，"
+                    "将清空后重新评审"
+                )
+                bid_record.ai_preliminary_review = None
+                bid_record.ai_preliminary_review_success = None
+                db.commit()
 
             # 创建任务
             tasks.append(
@@ -833,18 +868,19 @@ async def _batch_ai_preliminary_review_task(project_id: int):
             f"[批量AI初评任务] 项目 {project_id} 共有 {len(tasks)} 条记录需要处理"
         )
 
-        # 串行执行任务（避免并发过多导致资源耗尽）
-        for task in tasks:
-            try:
-                result = await task
-                logger.info(
-                    f"[批量AI初评任务] 投标记录 {result.get('bid_record_id')} "
-                    f"处理完成，状态: {result.get('status')}"
-                )
-            except Exception as e:
-                logger.error(
-                    f"[批量AI初评任务] 处理任务失败: {str(e)}"
-                )
+        # 并发执行所有任务（一起进行）
+        if tasks:
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for result in results:
+                if isinstance(result, Exception):
+                    logger.error(
+                        f"[批量AI初评任务] 处理任务失败: {str(result)}"
+                    )
+                else:
+                    logger.info(
+                        f"[批量AI初评任务] 投标记录 {result.get('bid_record_id')} "
+                        f"处理完成，状态: {result.get('status')}"
+                    )
 
         logger.info(f"[批量AI初评任务] 项目 {project_id} 处理完成")
 
@@ -864,6 +900,7 @@ async def _batch_ai_preliminary_review_task(project_id: int):
     summary="一键触发项目下所有供应商的 AI 初评（异步后台任务）",
     description=(
         "输入项目 ID，立即返回任务已启动的响应，然后在后台异步处理该项目下所有符合条件的投标记录。"
+        "会处理所有有投标文件的记录（无论是否已有AI初评结果，都会重新评审）。"
         "使用 /ai-preliminary-review/all/{project_id}/status 接口查询处理进度和结果。"
     ),
 )
@@ -876,9 +913,10 @@ async def ai_preliminary_review_all_async(
     
     - 立即返回响应，不阻塞请求
     - 在后台异步处理所有符合条件的投标记录
-    - 仅处理满足以下条件的记录：
+    - 处理满足以下条件的记录：
         * 有投标文件（bid_document_file_id 不为空）
-        * 当前 ai_preliminary_review、ai_preliminary_review_model_session 为空
+        * 当前没有正在处理的会话（ai_preliminary_review_model_session 为空）
+    - 如果已有AI初评结果，会先清空后重新评审（实现重新评审功能）
     - 使用状态查询接口获取处理进度和结果
     """
     project_id = request.project_id
@@ -904,13 +942,12 @@ async def ai_preliminary_review_all_async(
     total_count = len(bid_records)
     pending_count = 0
 
+    # 计算所有有投标文件的记录数（无论是否有AI初评结果，都会重新评审）
     for bid_record in bid_records:
-        if (
-            bid_record.bid_document_file_id
-            and not bid_record.ai_preliminary_review
-            and not bid_record.ai_preliminary_review_model_session
-        ):
-            pending_count += 1
+        if bid_record.bid_document_file_id:
+            # 如果有正在处理的会话，不算作pending（会被跳过）
+            if not bid_record.ai_preliminary_review_model_session:
+                pending_count += 1
 
     # 启动后台任务
     async def background_task():
@@ -949,6 +986,7 @@ async def ai_preliminary_review_all_async(
         "- failed: AI初评失败的记录列表"
         "- processing: 正在处理中的记录列表"
         "- pending: 待处理的记录列表"
+        "- manual_reviewed: 已有人工评审的记录列表（优先显示，即使AI评审失败或未完成）"
     ),
 )
 async def get_ai_preliminary_review_all_status(
@@ -963,6 +1001,10 @@ async def get_ai_preliminary_review_all_status(
     - failed: AI初评失败的记录列表
     - processing: 正在处理中的记录列表
     - pending: 待处理的记录列表
+    - manual_reviewed: 已有人工评审的记录列表（优先显示，即使AI评审失败或未完成）
+    
+    注意：如果投标记录已有人工评审（preliminary_review 不为空），
+    则优先显示为"已人工评审"状态，而不是失败状态。
     """
     # 验证项目是否存在
     project = db.query(Project).filter(Project.id == project_id).first()
@@ -978,6 +1020,7 @@ async def get_ai_preliminary_review_all_status(
     failed_list = []
     processing_list = []
     pending_list = []
+    manual_reviewed_list = []
 
     manager = get_manager()
 
@@ -1001,6 +1044,19 @@ async def get_ai_preliminary_review_all_status(
             "supplier_name": supplier_name,
             "has_bid_file": bool(bid_record.bid_document_file_id),
         }
+
+        # 优先判断是否有人工评审：如果已有人工评审，显示为"已人工评审"状态
+        if bid_record.preliminary_review:
+            record_info.update(
+                {
+                    "preliminary_review": bid_record.preliminary_review,
+                    "ai_preliminary_review": bid_record.ai_preliminary_review,
+                    "ai_preliminary_review_success": bid_record.ai_preliminary_review_success,
+                    "status": "manual_reviewed",
+                }
+            )
+            manual_reviewed_list.append(record_info)
+            continue
 
         # 判断状态
         if bid_record.ai_preliminary_review:
@@ -1065,8 +1121,13 @@ async def get_ai_preliminary_review_all_status(
                     }
                 )
             else:
-                # 没有投标文件，跳过
-                pass
+                # 没有投标文件，也添加到待处理列表
+                pending_list.append(
+                    {
+                        **record_info,
+                        "reason": "没有投标文件，无法进行AI初评",
+                    }
+                )
 
     return {
         "project_id": project_id,
@@ -1075,10 +1136,12 @@ async def get_ai_preliminary_review_all_status(
         "failed_count": len(failed_list),
         "processing_count": len(processing_list),
         "pending_count": len(pending_list),
+        "manual_reviewed_count": len(manual_reviewed_list),
         "success": success_list,
         "failed": failed_list,
         "processing": processing_list,
         "pending": pending_list,
+        "manual_reviewed": manual_reviewed_list,
     }
 
 
@@ -1154,8 +1217,16 @@ async def get_ai_preliminary_review_stream(
 
             # 使用 get_response 进行流式返回
             async for chunk in session.get_response():
+                # 构建数据对象，包含 content 和 reason_content（如果存在）
+                chunk_data = {}
                 if chunk.delta_content:
-                    yield f"data: {json.dumps({'type': 'chunk', 'content': chunk.delta_content})}\n\n"
+                    chunk_data['content'] = chunk.delta_content
+                if chunk.delta_reasoning_content:
+                    chunk_data['reason_content'] = chunk.delta_reasoning_content
+                
+                # 只要有任何一个字段存在，就发送chunk
+                if chunk_data:
+                    yield f"data: {json.dumps({'type': 'chunk', **chunk_data})}\n\n"
 
             # 结束时再尝试发送一次状态信息（可能会话已被转为 HistorySession）
             try:

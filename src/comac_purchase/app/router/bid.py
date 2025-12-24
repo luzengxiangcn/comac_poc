@@ -223,6 +223,7 @@ async def get_bid_records(
             "bid_document_file_id": bid_record.bid_document_file_id,
             "bid_file": bid_file,
             "ai_preliminary_review": bid_record.ai_preliminary_review,
+            "ai_preliminary_review_model_session": bid_record.ai_preliminary_review_model_session,
             "ai_preliminary_review_success": bid_record.ai_preliminary_review_success,
             "preliminary_review": bid_record.preliminary_review,
             "ai_evaluation": bid_record.ai_evaluation,
@@ -266,6 +267,27 @@ async def get_bid_records(
         
         record_data["identity_status"] = identity_status
         record_data["identity_recognition_model_session"] = bid_record.identity_recognition_model_session
+        
+        # 检查AI初评状态
+        ai_preliminary_status = None
+        if bid_record.ai_preliminary_review_model_session:
+            try:
+                from ...model_session.model_session_manager import get_manager, SessionStatus
+                manager = get_manager()
+                session_status = manager.get_session_status(bid_record.ai_preliminary_review_model_session)
+                if session_status == SessionStatus.RUNNING:
+                    ai_preliminary_status = "运行中"
+                elif session_status == SessionStatus.FINISHED:
+                    ai_preliminary_status = "已完成"
+                elif session_status == SessionStatus.ERROR:
+                    ai_preliminary_status = "失败"
+                else:
+                    ai_preliminary_status = "待处理"
+            except Exception:
+                # 无法获取会话状态，可能已过期
+                ai_preliminary_status = None
+        
+        record_data["ai_preliminary_status"] = ai_preliminary_status
         
         result.append(record_data)
     

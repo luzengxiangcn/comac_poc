@@ -313,6 +313,14 @@
             <div class="detail-section">
               <h3 class="section-title">
                 <span>供应商初审</span>
+                <button 
+                  class="refresh-btn" 
+                  @click="handleRefreshSuppliers"
+                  :disabled="refreshingSuppliers"
+                  title="刷新供应商列表"
+                >
+                  {{ refreshingSuppliers ? '刷新中...' : '刷新' }}
+                </button>
               </h3>
               <div class="section-content preliminary-content">
                 <div v-if="bidRecords.length" class="suppliers-grid preliminary-suppliers-grid">
@@ -336,7 +344,7 @@
                     :disabled="aiPreliminaryReviewing"
                     @click="handleAiPreliminaryReview"
                   >
-                    {{ aiPreliminaryReviewing ? 'AI初评中...' : '一键AI初评' }}
+                    {{ aiPreliminaryReviewing ? 'AI初评中...' : (allSuppliersReviewed ? '重新AI初评' : '一键AI初评') }}
                   </button>
                   <div v-if="aiPreliminaryStatus" class="ai-review-status">
                     <div class="status-summary">
@@ -351,12 +359,18 @@
 
                 <div v-if="selectedBidRecord" class="preliminary-detail">
                   <h4 class="preliminary-detail-title">
-                    当前供应商：{{ selectedBidRecord.supplier?.name || '未知供应商' }}
+                    <span>当前供应商：{{ selectedBidRecord.supplier?.name || '未知供应商' }}</span>
                   </h4>
                   <div class="preliminary-detail-body">
                     <div class="preliminary-row">
                       <span class="label">初审结果：</span>
                       <div class="value preliminary-status-edit">
+                        <div class="preliminary-status-header">
+                          <span v-if="isPreliminaryFromAI(selectedBidRecord)" class="ai-status-notice">
+                            <span class="ai-notice-icon">🤖</span>
+                            <span class="ai-notice-text">AI生成需确认</span>
+                          </span>
+                        </div>
                         <select
                           v-model="manualPreliminaryStatus"
                           class="status-select"
@@ -370,10 +384,6 @@
                     <div class="preliminary-row">
                       <span class="label">理由：</span>
                       <div class="value preliminary-reason-edit">
-                        <div v-if="isReasonFromAI(selectedBidRecord)" class="ai-reason-notice">
-                          <span class="ai-notice-icon">🤖</span>
-                          <span class="ai-notice-text">当前显示的是AI初审结果，请人工审核确认</span>
-                        </div>
                         <textarea
                           v-model="manualPreliminaryReason"
                           rows="5"
@@ -441,8 +451,15 @@
               </div>
             </div>
           </div>
-          <div v-else-if="aiPreliminaryContent" class="ai-preliminary-content">
-            <pre>{{ aiPreliminaryContent }}</pre>
+          <div v-else-if="aiPreliminaryContent || aiPreliminaryReasonContent" class="ai-preliminary-content">
+            <div v-if="aiPreliminaryReasonContent" class="reason-content-section">
+              <div class="section-title">推理过程：</div>
+              <pre class="reason-content">{{ aiPreliminaryReasonContent }}</pre>
+            </div>
+            <div v-if="aiPreliminaryContent" class="content-section">
+              <div class="section-title">回答内容：</div>
+              <pre class="content">{{ aiPreliminaryContent }}</pre>
+            </div>
           </div>
           <div v-else-if="loadingAiPreliminary" class="loading">
             正在加载AI初评结果...
@@ -478,7 +495,7 @@ import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { getProjectDetail, getFileContent, uploadProjectDocuments, downloadFile, renameProjectTitle } from '../api/project'
 import { getBidRecords, updateBidRecord } from '../api/bid'
-import { generateTender, getTenderGenerationList, useTenderGeneration, deleteTenderGeneration, getTenderGenerationStream, getAiPreliminaryReviewStream, aiPreliminaryReviewAllAsync, getAiPreliminaryReviewAllStatus } from '../api/llm'
+import { generateTender, getTenderGenerationList, useTenderGeneration, deleteTenderGeneration, getTenderGenerationStream, getAiPreliminaryReviewStream, aiPreliminaryReviewAllAsync, getAiPreliminaryReviewAllStatus, aiPreliminaryReview } from '../api/llm'
 import SupplierCard from '../components/SupplierCard.vue'
 import AddSupplierDialog from '../components/AddSupplierDialog.vue'
 import BatchImportSupplierDialog from '../components/BatchImportSupplierDialog.vue'
@@ -505,8 +522,10 @@ export default {
     const bidRecords = ref([])
     const selectedBidRecord = ref(null)
     const aiPreliminaryReviewing = ref(false)
+    const singleAiPreliminaryReviewing = ref(false)
     const aiPreliminaryStatus = ref(null)
     const aiPreliminaryStatusTimer = ref(null)
+    const aiPreliminaryQueryCount = ref(0) // 用于控制刷新频率
     const manualPreliminaryReason = ref('')
     const manualPreliminaryStatus = ref('null')
     const savingPreliminary = ref(false)
@@ -525,6 +544,7 @@ export default {
     const showAiPreliminaryDialog = ref(false)
     const currentAiPreliminaryBidRecord = ref(null)
     const aiPreliminaryContent = ref('')
+    const aiPreliminaryReasonContent = ref('')
     const loadingAiPreliminary = ref(false)
     const aiPreliminaryResult = ref(null)
     
@@ -685,6 +705,24 @@ export default {
       )
     })
 
+    // 判断所有供应商是否都已AI评审完成
+    const allSuppliersReviewed = computed(() => {
+      if (!bidRecords.value || bidRecords.value.length === 0) {
+        return false
+      }
+      // 检查所有有投标文件的供应商是否都有AI初评结果
+      const suppliersWithBidFile = bidRecords.value.filter(
+        bid => bid.bid_document_file_id
+      )
+      if (suppliersWithBidFile.length === 0) {
+        return false
+      }
+      // 所有有投标文件的供应商都必须有AI初评结果，且没有正在处理的会话
+      return suppliersWithBidFile.every(bid => 
+        bid.ai_preliminary_review && !bid.ai_preliminary_review_model_session
+      )
+    })
+
     const stopSupplierAutoRefresh = () => {
       if (supplierRefreshTimer) {
         clearInterval(supplierRefreshTimer)
@@ -710,7 +748,7 @@ export default {
         } catch (e) {
           console.error('Auto refresh suppliers failed:', e)
         }
-      }, 5000)
+      }, 2000)
     }
 
     const handleRefreshSuppliers = async () => {
@@ -724,6 +762,33 @@ export default {
         } else {
           stopSupplierAutoRefresh()
         }
+        
+        // 检查并恢复AI初评状态（如果在初审页面）
+        if (activeTab.value === 'preliminary') {
+          try {
+            const statusResponse = await getAiPreliminaryReviewAllStatus(projectId.value)
+            aiPreliminaryStatus.value = statusResponse
+            
+            // 如果有正在处理的任务（processing_count > 0 或 pending_count > 0），恢复轮询
+            if (
+              statusResponse &&
+              (statusResponse.processing_count > 0 || statusResponse.pending_count > 0)
+            ) {
+              aiPreliminaryReviewing.value = true
+              // 如果还没有轮询，启动轮询
+              if (!aiPreliminaryStatusTimer.value) {
+                startStatusPolling()
+              }
+            } else {
+              // 没有正在处理的任务，确保停止轮询
+              stopStatusPolling()
+              aiPreliminaryReviewing.value = false
+            }
+          } catch (e) {
+            // 查询AI初评状态失败不影响刷新供应商列表
+            console.error('查询AI初评状态失败:', e)
+          }
+        }
       } catch (e) {
         console.error('Manual refresh suppliers failed:', e)
       } finally {
@@ -736,29 +801,72 @@ export default {
       fetchBidRecords()
     }
 
-    const handleBatchImportSuccess = () => {
+    const handleBatchImportSuccess = async () => {
       showBatchImportDialog.value = false
-      fetchBidRecords()
+      await fetchBidRecords()
+      // 批量导入后，如果有识别中的供应商，启动自动刷新
+      if (hasIdentifyingSuppliers.value) {
+        startSupplierAutoRefresh()
+      }
     }
 
     const handleSelectBidRecord = (bid) => {
       selectedBidRecord.value = bid
       // 切换供应商时，输入框默认填当前理由
       manualPreliminaryReason.value = getPreliminaryReason(bid) || ''
-      // 初始化状态：根据人工初审（preliminary_review）设置
+      // 初始化状态：优先使用人工初审（preliminary_review），如果没有则使用AI初审（ai_preliminary_review）
       const preliminaryReview = bid.preliminary_review
-      if (preliminaryReview && typeof preliminaryReview.pass !== 'undefined') {
-        const status = preliminaryReview.pass
-        if (status === true) {
-          manualPreliminaryStatus.value = 'true'
-        } else if (status === false) {
-          manualPreliminaryStatus.value = 'false'
-        } else {
-          manualPreliminaryStatus.value = 'null'
+      if (preliminaryReview) {
+        // 如果是字符串，尝试解析
+        let reviewData = preliminaryReview
+        if (typeof preliminaryReview === 'string') {
+          try {
+            reviewData = JSON.parse(preliminaryReview)
+          } catch (e) {
+            // 解析失败，继续检查AI初审
+          }
         }
-      } else {
-        manualPreliminaryStatus.value = 'null'
+        if (reviewData && typeof reviewData.pass !== 'undefined') {
+          const status = reviewData.pass
+          if (status === true) {
+            manualPreliminaryStatus.value = 'true'
+          } else if (status === false) {
+            manualPreliminaryStatus.value = 'false'
+          } else {
+            manualPreliminaryStatus.value = 'null'
+          }
+          return
+        }
       }
+      
+      // 如果没有人工初审，检查AI初审
+      const aiReview = bid.ai_preliminary_review
+      if (aiReview) {
+        // 如果是字符串，尝试解析
+        let reviewData = aiReview
+        if (typeof aiReview === 'string') {
+          try {
+            reviewData = JSON.parse(aiReview)
+          } catch (e) {
+            manualPreliminaryStatus.value = 'null'
+            return
+          }
+        }
+        if (reviewData && typeof reviewData.pass !== 'undefined') {
+          const passValue = reviewData.pass
+          if (passValue === true || passValue === 'true' || passValue === 'True') {
+            manualPreliminaryStatus.value = 'true'
+          } else if (passValue === false || passValue === 'false' || passValue === 'False') {
+            manualPreliminaryStatus.value = 'false'
+          } else {
+            manualPreliminaryStatus.value = 'null'
+          }
+          return
+        }
+      }
+      
+      // 都没有则显示未开始
+      manualPreliminaryStatus.value = 'null'
     }
 
     const handleSavePreliminary = async () => {
@@ -1027,6 +1135,9 @@ export default {
         // 注意：axios 响应拦截器已经返回了 response.data，所以 response 就是数据本身
         const response = await aiPreliminaryReviewAllAsync(projectId.value)
         
+        // 立即刷新供应商列表，确保状态同步（后端会清空已有的AI初评结果）
+        await fetchBidRecords()
+        
         // 显示启动成功消息
         notification.value = {
           visible: true,
@@ -1047,11 +1158,97 @@ export default {
       }
     }
 
+    const handleSingleAiPreliminaryReview = async () => {
+      if (!selectedBidRecord.value || !projectId.value) return
+      
+      // 检查是否有投标文件
+      if (!selectedBidRecord.value.bid_document_file_id) {
+        notification.value = {
+          visible: true,
+          message: '该供应商没有投标文件，无法进行AI初评',
+          type: 'error'
+        }
+        return
+      }
+      
+      try {
+        singleAiPreliminaryReviewing.value = true
+        
+        // 调用单个供应商的AI初评接口（同步等待结果）
+        const response = await aiPreliminaryReview(
+          projectId.value,
+          selectedBidRecord.value.supplier_id
+        )
+        
+        // 刷新供应商列表，更新状态
+        await fetchBidRecords()
+        
+        // 更新选中的供应商记录
+        const refreshed = bidRecords.value.find(
+          (item) => item.bid_record_id === selectedBidRecord.value.bid_record_id
+        )
+        if (refreshed) {
+          selectedBidRecord.value = refreshed
+          // 更新显示的理由和状态
+          const preliminaryReview = refreshed.preliminary_review
+          if (preliminaryReview) {
+            let reviewData = preliminaryReview
+            if (typeof preliminaryReview === 'string') {
+              try {
+                reviewData = JSON.parse(preliminaryReview)
+              } catch (e) {
+                // 解析失败，忽略
+              }
+            }
+            if (reviewData && typeof reviewData.pass !== 'undefined') {
+              manualPreliminaryStatus.value = reviewData.pass === true ? 'true' : (reviewData.pass === false ? 'false' : 'null')
+              manualPreliminaryReason.value = reviewData.reason || ''
+            }
+          } else {
+            // 如果没有人工初审，显示AI初审结果
+            const aiReview = refreshed.ai_preliminary_review
+            if (aiReview) {
+              let reviewData = aiReview
+              if (typeof aiReview === 'string') {
+                try {
+                  reviewData = JSON.parse(aiReview)
+                } catch (e) {
+                  // 解析失败，忽略
+                }
+              }
+              if (reviewData) {
+                manualPreliminaryReason.value = reviewData.reason || ''
+              }
+            }
+          }
+        }
+        
+        // 显示成功消息
+        notification.value = {
+          visible: true,
+          message: 'AI初评完成',
+          type: 'success'
+        }
+      } catch (err) {
+        console.error('单个供应商AI初评失败:', err)
+        notification.value = {
+          visible: true,
+          message: err.response?.data?.detail || err.message || 'AI初评失败',
+          type: 'error'
+        }
+      } finally {
+        singleAiPreliminaryReviewing.value = false
+      }
+    }
+
     const startStatusPolling = () => {
       // 清除之前的定时器
       if (aiPreliminaryStatusTimer.value) {
         clearInterval(aiPreliminaryStatusTimer.value)
       }
+      
+      // 重置查询计数器
+      aiPreliminaryQueryCount.value = 0
       
       // 立即查询一次状态
       queryAiPreliminaryStatus()
@@ -1067,6 +1264,7 @@ export default {
         clearInterval(aiPreliminaryStatusTimer.value)
         aiPreliminaryStatusTimer.value = null
       }
+      aiPreliminaryQueryCount.value = 0
     }
 
     const queryAiPreliminaryStatus = async () => {
@@ -1076,6 +1274,19 @@ export default {
         // 注意：axios 响应拦截器已经返回了 response.data，所以 response 就是数据本身
         const response = await getAiPreliminaryReviewAllStatus(projectId.value)
         aiPreliminaryStatus.value = response
+        aiPreliminaryQueryCount.value += 1
+        
+        // 如果有正在处理的任务，定期刷新供应商列表以同步状态（每3次轮询刷新一次，避免过于频繁）
+        if (
+          aiPreliminaryStatus.value &&
+          (aiPreliminaryStatus.value.processing_count > 0 || 
+           aiPreliminaryStatus.value.pending_count > 0)
+        ) {
+          // 每3次轮询刷新一次供应商列表，确保状态同步但不过于频繁
+          if (aiPreliminaryQueryCount.value % 3 === 0) {
+            await fetchBidRecords()
+          }
+        }
         
         // 如果所有任务都完成了（没有processing和pending的记录），停止轮询
         if (
@@ -1085,6 +1296,7 @@ export default {
         ) {
           stopStatusPolling()
           aiPreliminaryReviewing.value = false
+          aiPreliminaryQueryCount.value = 0
           
           // 刷新投标记录列表
           await fetchBidRecords()
@@ -1108,6 +1320,7 @@ export default {
       currentAiPreliminaryBidRecord.value = bidRecord
       showAiPreliminaryDialog.value = true
       aiPreliminaryContent.value = ''
+      aiPreliminaryReasonContent.value = ''
       loadingAiPreliminary.value = true
       aiPreliminaryResult.value = null
 
@@ -1145,8 +1358,13 @@ export default {
               if (line.startsWith('data: ')) {
                 try {
                   const data = JSON.parse(line.slice(6))
-                  if (data.type === 'chunk' && data.content) {
-                    aiPreliminaryContent.value += data.content
+                  if (data.type === 'chunk') {
+                    if (data.content) {
+                      aiPreliminaryContent.value += data.content
+                    }
+                    if (data.reason_content) {
+                      aiPreliminaryReasonContent.value += data.reason_content
+                    }
                   } else if (data.type === 'status') {
                     // 状态更新
                   } else if (data.type === 'error') {
@@ -1181,6 +1399,7 @@ export default {
       showAiPreliminaryDialog.value = false
       currentAiPreliminaryBidRecord.value = null
       aiPreliminaryContent.value = ''
+      aiPreliminaryReasonContent.value = ''
       aiPreliminaryResult.value = null
     }
 
@@ -1652,6 +1871,25 @@ export default {
       if (hasIdentifyingSuppliers.value) {
         startSupplierAutoRefresh()
       }
+      // 如果初始就在初审页面，检查并恢复AI初评状态
+      if (activeTab.value === 'preliminary') {
+        try {
+          const statusResponse = await getAiPreliminaryReviewAllStatus(projectId.value)
+          aiPreliminaryStatus.value = statusResponse
+          
+          // 如果有正在处理的任务（processing_count > 0 或 pending_count > 0），启动轮询
+          if (
+            statusResponse &&
+            (statusResponse.processing_count > 0 || statusResponse.pending_count > 0)
+          ) {
+            aiPreliminaryReviewing.value = true
+            startStatusPolling()
+          }
+        } catch (e) {
+          // 查询AI初评状态失败不影响页面加载
+          console.error('查询AI初评状态失败:', e)
+        }
+      }
       // 默认加载详情页面的内容
       if (activeTab.value === 'detail') {
         await fetchBusinessRequirementDocument()
@@ -1689,6 +1927,7 @@ export default {
       bidRecords,
       selectedBidRecord,
       aiPreliminaryReviewing,
+      singleAiPreliminaryReviewing,
       manualPreliminaryReason,
       manualPreliminaryStatus,
       savingPreliminary,
@@ -1706,6 +1945,7 @@ export default {
       showAiPreliminaryDialog,
       currentAiPreliminaryBidRecord,
       aiPreliminaryContent,
+      aiPreliminaryReasonContent,
       loadingAiPreliminary,
       aiPreliminaryResult,
       handleAiPreliminaryClick,
@@ -1720,6 +1960,7 @@ export default {
       getPreliminaryReason,
       isReasonFromAI,
       handleAiPreliminaryReview,
+      handleSingleAiPreliminaryReview,
       aiPreliminaryStatus,
       goBack,
       fetchTenderDocument,
@@ -1911,6 +2152,31 @@ export default {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.refresh-btn {
+  padding: 6px 16px;
+  background-color: var(--primary-color);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: all 0.3s;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.refresh-btn:hover:not(:disabled) {
+  background-color: #1890ff;
+  box-shadow: 0 2px 8px rgba(24, 144, 255, 0.3);
+}
+
+.refresh-btn:disabled {
+  background-color: #cbd5e1;
+  color: #94a3b8;
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 .section-content {
@@ -2459,6 +2725,39 @@ export default {
   line-height: 1.5;
 }
 
+.ai-preliminary-content .reason-content-section,
+.ai-preliminary-content .content-section {
+  margin-bottom: 20px;
+}
+
+.ai-preliminary-content .reason-content-section:last-child,
+.ai-preliminary-content .content-section:last-child {
+  margin-bottom: 0;
+}
+
+.ai-preliminary-content .section-title {
+  font-weight: 600;
+  font-size: 14px;
+  color: #333;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #ddd;
+}
+
+.ai-preliminary-content .reason-content {
+  background-color: #fff8e1;
+  padding: 12px;
+  border-radius: 4px;
+  border-left: 3px solid #ffc107;
+}
+
+.ai-preliminary-content .content {
+  background-color: #e3f2fd;
+  padding: 12px;
+  border-radius: 4px;
+  border-left: 3px solid #2196f3;
+}
+
 /* AI初评结果两栏显示样式 */
 .ai-preliminary-result {
   display: flex;
@@ -2570,6 +2869,32 @@ export default {
   font-weight: 600;
   margin-bottom: 12px;
   color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ai-preliminary-btn {
+  padding: 6px 16px;
+  font-size: 14px;
+  font-weight: 500;
+  color: #fff;
+  background-color: var(--primary-color);
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.ai-preliminary-btn:hover:not(:disabled) {
+  background-color: var(--primary-color-dark, #0056b3);
+}
+
+.ai-preliminary-btn:disabled {
+  background-color: #ccc;
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 .preliminary-detail-body {
@@ -2589,7 +2914,8 @@ export default {
 .preliminary-row .label {
   flex-shrink: 0;
   padding-top: 6px;
-  width: 72px;
+  width: 90px;
+  white-space: nowrap;
 }
 
 .preliminary-row .value {
@@ -2599,6 +2925,14 @@ export default {
 
 .preliminary-status-edit {
   width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.preliminary-status-header {
+  display: flex;
+  align-items: center;
 }
 
 .preliminary-status-edit .status-select {
@@ -2613,6 +2947,56 @@ export default {
 
 .preliminary-status-edit .status-select:hover {
   border-color: var(--primary-color);
+}
+
+.preliminary-status-display {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.preliminary-status-badge {
+  display: inline-block;
+  padding: 4px 12px;
+  border-radius: 4px;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.preliminary-status-badge.status-success {
+  color: var(--success-color);
+  background-color: #f0f9ff;
+}
+
+.preliminary-status-badge.status-failed {
+  color: var(--danger-color);
+  background-color: #fef0f0;
+}
+
+.preliminary-status-badge.status-pending {
+  color: var(--text-secondary);
+  background-color: #f5f7fa;
+}
+
+.ai-status-notice {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  background-color: #fff7e6;
+  border: 1px solid #ffd591;
+  border-radius: 4px;
+  font-size: 12px;
+  color: #d46b08;
+}
+
+.ai-status-notice .ai-notice-icon {
+  font-size: 14px;
+}
+
+.ai-status-notice .ai-notice-text {
+  font-size: 12px;
 }
 
 .preliminary-reason-edit {

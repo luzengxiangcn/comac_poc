@@ -1,6 +1,7 @@
 """
 FastAPI 应用主文件
 """
+import mimetypes
 from pathlib import Path
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request
@@ -54,11 +55,12 @@ api_router.include_router(llm_init_check_router)
 # 注册API路由组（/api前缀）
 app.include_router(api_router)
 
-# 挂载前端静态文件目录（CSS、JS、图片等）
+# 挂载前端静态文件目录（必须在SPA路由之前挂载）
+# FastAPI会优先匹配mount的路由，StaticFiles会自动处理MIME类型
 if _frontend_dist.exists():
-    # 挂载assets目录
     assets_dir = _frontend_dist / "assets"
     if assets_dir.exists():
+        # 使用StaticFiles挂载assets目录，确保正确的MIME类型
         app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
 
 
@@ -85,11 +87,12 @@ async def serve_spa(request: Request, full_path: str):
     # 获取完整请求路径
     request_path = request.url.path
     
-    # 排除 API 路由（/api 开头的路径应该已经被前面的路由处理了，这里只是双重保险）
+    # 排除 API 路由
     if request_path.startswith("/api"):
         raise HTTPException(status_code=404, detail="API资源未找到")
     
-    # 排除静态资源路径（/assets 已经通过 mount 挂载，这里只是双重保险）
+    # 排除静态资源路径（/assets 已经通过 mount 挂载，FastAPI会优先处理）
+    # 如果请求到达这里，说明/assets路径没有被正确匹配，返回404而不是HTML
     if request_path.startswith("/assets"):
         raise HTTPException(status_code=404, detail="静态资源未找到")
     
@@ -97,7 +100,7 @@ async def serve_spa(request: Request, full_path: str):
     if ".." in full_path:
         raise HTTPException(status_code=400, detail="非法路径")
     
-    # 如果请求的是静态文件且文件存在，直接返回
+    # 如果请求的是静态文件且文件存在，直接返回（处理其他静态资源如favicon.ico等）
     static_file_path = _frontend_dist / full_path
     # 确保文件在dist目录内（防止路径遍历）
     try:
@@ -110,7 +113,21 @@ async def serve_spa(request: Request, full_path: str):
         raise HTTPException(status_code=403, detail="访问被拒绝")
     
     if static_file_path.exists() and static_file_path.is_file():
-        return FileResponse(str(static_file_path))
+        # 根据文件扩展名设置正确的MIME类型
+        media_type = None
+        if static_file_path.suffix == ".js":
+            media_type = "application/javascript"
+        elif static_file_path.suffix == ".mjs":
+            media_type = "application/javascript"
+        elif static_file_path.suffix == ".css":
+            media_type = "text/css"
+        elif static_file_path.suffix == ".html":
+            media_type = "text/html"
+        else:
+            # 使用mimetypes模块自动检测
+            media_type, _ = mimetypes.guess_type(str(static_file_path))
+        
+        return FileResponse(str(static_file_path), media_type=media_type)
     
     # 否则返回index.html（支持前端路由）
     index_path = _frontend_dist / "index.html"
@@ -123,4 +140,3 @@ async def serve_spa(request: Request, full_path: str):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
-

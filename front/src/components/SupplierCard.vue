@@ -4,12 +4,6 @@
     :class="{ clickable: clickable, selected: selected }"
     @click="handleClick"
   >
-    <div class="ai-preliminary-review-status" @click.stop="handleAiPreliminaryClick">
-      <span class="label">AI初评：</span>
-      <span :class="['status-badge', getAiPreliminaryStatusClass()]">
-        {{ getAiPreliminaryStatusText() }}
-      </span>
-    </div>
     <div class="supplier-name">{{ getSupplierName() }}</div>
     <div class="supplier-tags" v-if="isIdentifying()">
       <span class="identifying-tag">识别中..</span>
@@ -33,6 +27,12 @@
         <span class="label">标书评审：</span>
         <span :class="['status-badge', getEvaluationStatusClass()]">
           {{ getEvaluationStatusText() }}
+        </span>
+      </div>
+      <div class="info-item ai-preliminary-review-item" @click.stop="handleAiPreliminaryClick">
+        <span class="label">AI初评：</span>
+        <span :class="['status-badge', getAiPreliminaryStatusClass()]">
+          {{ getAiPreliminaryStatusText() }}
         </span>
       </div>
     </div>
@@ -67,19 +67,30 @@ export default {
     },
     handleAiPreliminaryClick() {
       const status = this.getAiPreliminaryStatus()
-      // 只有进行中和已结束状态可以点击
-      if (status === 'running' || status === 'finished') {
+      // 只有运行中和成功状态可以点击
+      if (status === 'running' || status === 'success') {
         this.$emit('ai-preliminary-click', this.bidRecord)
       }
     },
     getAiPreliminaryStatus() {
+      // 优先使用后端返回的状态字段（如果存在）
+      if (this.bidRecord.ai_preliminary_status) {
+        const status = this.bidRecord.ai_preliminary_status
+        if (status === '运行中') {
+          return 'running'
+        } else if (status === '已完成') {
+          return 'success'
+        } else if (status === '失败') {
+          return 'failed'
+        }
+      }
       // 如果有 model_session，说明正在进行中
       if (this.bidRecord.ai_preliminary_review_model_session) {
         return 'running'
       }
-      // 如果有 ai_preliminary_review，说明已结束
+      // 如果没有 model_session，但有 ai_preliminary_review，说明已成功
       if (this.bidRecord.ai_preliminary_review) {
-        return 'finished'
+        return 'success'
       }
       // 否则是未开始
       return 'not_started'
@@ -87,9 +98,11 @@ export default {
     getAiPreliminaryStatusText() {
       const status = this.getAiPreliminaryStatus()
       if (status === 'running') {
-        return '进行中'
-      } else if (status === 'finished') {
-        return '已结束'
+        return '运行中'
+      } else if (status === 'success') {
+        return '成功'
+      } else if (status === 'failed') {
+        return '失败'
       }
       return '未开始'
     },
@@ -97,8 +110,10 @@ export default {
       const status = this.getAiPreliminaryStatus()
       if (status === 'running') {
         return 'status-running'
-      } else if (status === 'finished') {
+      } else if (status === 'success') {
         return 'status-finished'
+      } else if (status === 'failed') {
+        return 'status-failed'
       }
       return 'status-pending'
     },
@@ -292,33 +307,16 @@ export default {
   box-shadow: 0 0 0 2px rgba(24, 144, 255, 0.2);
 }
 
-.ai-preliminary-review-status {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 12px;
-  padding: 8px;
-  background-color: #f5f5f5;
-  border-radius: 4px;
+.ai-preliminary-review-item {
   cursor: pointer;
   transition: background-color 0.2s;
 }
 
-.ai-preliminary-review-status:hover {
-  background-color: #e8e8e8;
-}
-
-.ai-preliminary-review-status .label {
-  color: var(--text-secondary);
-  font-size: 13px;
-  font-weight: 500;
-}
-
-.ai-preliminary-review-status .status-badge {
-  padding: 4px 10px;
+.ai-preliminary-review-item:hover {
+  background-color: #f5f5f5;
   border-radius: 4px;
-  font-size: 12px;
-  font-weight: 500;
+  padding: 4px 8px;
+  margin: 4px -8px;
 }
 
 .status-running {
