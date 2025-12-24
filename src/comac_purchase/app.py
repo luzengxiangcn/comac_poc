@@ -55,26 +55,92 @@ api_router.include_router(llm_init_check_router)
 # 注册API路由组（/api前缀）
 app.include_router(api_router)
 
-# 挂载前端静态文件目录（必须在SPA路由之前挂载）
-# FastAPI会优先匹配mount的路由，StaticFiles会自动处理MIME类型
-if _frontend_dist.exists():
-    assets_dir = _frontend_dist / "assets"
-    if assets_dir.exists():
-        # 使用StaticFiles挂载assets目录，确保正确的MIME类型
-        app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
-
 
 @app.get("/")
 async def serve_frontend():
     """根路径，返回前端index.html"""
     index_path = _frontend_dist / "index.html"
     if index_path.exists():
-        return FileResponse(str(index_path), media_type="text/html")
+        # 禁用index.html的缓存，确保总是获取最新版本
+        headers = {
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0"
+        }
+        return FileResponse(str(index_path), media_type="text/html", headers=headers)
     return {
         "message": "商飞智能采购POC API",
         "version": "1.0.0",
         "note": "前端资源未找到，请先构建前端项目"
     }
+
+
+# 静态资源路由：处理 /assets 路径下的静态文件（必须在SPA路由之前注册）
+@app.get("/assets/{file_path:path}")
+async def serve_static_assets(file_path: str):
+    """
+    处理静态资源请求（/assets路径下的文件）
+    确保JS、CSS等静态资源能正确加载，并设置正确的MIME类型
+    """
+    # 调试日志：确认路由被调用
+    print(f"[DEBUG] 静态资源请求: /assets/{file_path}")
+    
+    if not _frontend_dist.exists():
+        raise HTTPException(status_code=404, detail="前端资源未找到")
+    
+    # 安全检查：防止路径遍历攻击
+    if ".." in file_path:
+        raise HTTPException(status_code=400, detail="非法路径")
+    
+    # 构建文件路径
+    static_file_path = _frontend_dist / "assets" / file_path
+    
+    # 确保文件在assets目录内（防止路径遍历）
+    try:
+        static_file_path.resolve().relative_to((_frontend_dist / "assets").resolve())
+    except ValueError:
+        raise HTTPException(status_code=403, detail="访问被拒绝")
+    
+    # 检查文件是否存在
+    if not static_file_path.exists() or not static_file_path.is_file():
+        print(f"[DEBUG] 文件不存在: {static_file_path}")
+        raise HTTPException(status_code=404, detail="静态资源未找到")
+    
+    # 根据文件扩展名设置正确的MIME类型
+    media_type = None
+    if static_file_path.suffix == ".js" or static_file_path.suffix == ".mjs":
+        media_type = "application/javascript"
+    elif static_file_path.suffix == ".css":
+        media_type = "text/css"
+    elif static_file_path.suffix == ".json":
+        media_type = "application/json"
+    elif static_file_path.suffix == ".png":
+        media_type = "image/png"
+    elif static_file_path.suffix == ".jpg" or static_file_path.suffix == ".jpeg":
+        media_type = "image/jpeg"
+    elif static_file_path.suffix == ".svg":
+        media_type = "image/svg+xml"
+    elif static_file_path.suffix == ".ico":
+        media_type = "image/x-icon"
+    else:
+        # 使用mimetypes模块自动检测
+        media_type, _ = mimetypes.guess_type(str(static_file_path))
+        if not media_type:
+            media_type = "application/octet-stream"
+    
+    # 调试日志：在media_type确定后打印
+    print(f"[DEBUG] 返回文件: {static_file_path}, MIME类型: {media_type}")
+    
+    # 设置缓存控制头，避免浏览器缓存问题
+    # 对于静态资源，可以设置较长的缓存时间，但开发时可以禁用缓存
+    headers = {
+        "Cache-Control": "public, max-age=3600",  # 缓存1小时
+    }
+    return FileResponse(
+        str(static_file_path), 
+        media_type=media_type,
+        headers=headers
+    )
 
 
 # SPA路由支持：所有未匹配的路由都返回index.html（必须在最后注册）
@@ -91,8 +157,7 @@ async def serve_spa(request: Request, full_path: str):
     if request_path.startswith("/api"):
         raise HTTPException(status_code=404, detail="API资源未找到")
     
-    # 排除静态资源路径（/assets 已经通过 mount 挂载，FastAPI会优先处理）
-    # 如果请求到达这里，说明/assets路径没有被正确匹配，返回404而不是HTML
+    # 排除静态资源路径（/assets 已经通过上面的路由处理）
     if request_path.startswith("/assets"):
         raise HTTPException(status_code=404, detail="静态资源未找到")
     
