@@ -218,11 +218,14 @@ async def get_bid_records(
         # 构建返回数据
         record_data = {
             "bid_record_id": bid_record.id,
-                "project_id": bid_record.project_id,
-                "supplier_id": bid_record.supplier_id,
-                "bid_document_file_id": bid_record.bid_document_file_id,
+            "project_id": bid_record.project_id,
+            "supplier_id": bid_record.supplier_id,
+            "bid_document_file_id": bid_record.bid_document_file_id,
             "bid_file": bid_file,
+            "ai_preliminary_review": bid_record.ai_preliminary_review,
             "ai_preliminary_review_success": bid_record.ai_preliminary_review_success,
+            "preliminary_review": bid_record.preliminary_review,
+            "ai_evaluation": bid_record.ai_evaluation,
             "ai_evaluation_success": bid_record.ai_evaluation_success,
             "submission_time": bid_record.submission_time.isoformat() if bid_record.submission_time else None
         }

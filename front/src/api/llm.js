@@ -59,3 +59,57 @@ export const getTenderGenerationStream = (tenderGenerationId) => {
   })
 }
 
+/**
+ * 触发单个供应商投标记录的 AI 初审
+ * @param {number} projectId - 项目ID
+ * @param {number} supplierId - 供应商ID
+ */
+export const aiPreliminaryReview = (projectId, supplierId) => {
+  return api.post('/llm-init-check/ai-preliminary-review', {
+    project_id: projectId,
+    supplier_id: supplierId
+  })
+}
+
+/**
+ * 触发项目下所有供应商投标记录的 AI 初审（同步版本，会阻塞等待所有结果）
+ * @param {number} projectId - 项目ID
+ */
+export const aiPreliminaryReviewAll = (projectId) => {
+  return api.post('/llm-init-check/ai-preliminary-review/all', {
+    project_id: projectId
+  })
+}
+
+/**
+ * 一键触发项目下所有供应商的 AI 初评（异步后台任务版本）
+ * @param {number} projectId - 项目ID
+ */
+export const aiPreliminaryReviewAllAsync = (projectId) => {
+  return api.post('/llm-init-check/ai-preliminary-review/all/async', {
+    project_id: projectId
+  })
+}
+
+/**
+ * 查询项目下所有供应商 AI 初评的状态和进度
+ * @param {number} projectId - 项目ID
+ */
+export const getAiPreliminaryReviewAllStatus = (projectId) => {
+  return api.get(`/llm-init-check/ai-preliminary-review/all/${projectId}/status`)
+}
+
+/**
+ * 获取单个供应商 AI 初审的流式响应或结果
+ * @param {number} projectId - 项目ID
+ * @param {number} supplierId - 供应商ID
+ * @returns {Promise<Response>} Fetch Response 对象，用于流式读取或 JSON 响应
+ */
+export const getAiPreliminaryReviewStream = (projectId, supplierId) => {
+  return fetch(`/api/llm-init-check/ai-preliminary-review/${projectId}/${supplierId}/stream`, {
+    headers: {
+      'Accept': 'text/event-stream'
+    }
+  })
+}
+

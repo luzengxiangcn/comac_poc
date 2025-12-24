@@ -430,8 +430,43 @@ class LiveSession(LLMSession):
                 yield chunk
             return
         
+        # 此时会话处于 RUNNING 状态，但存在一个竞态条件：
+        # 前端可能在刚触发 run() 后立刻调用 get_response()，
+        # 而 run() 内部先将状态置为 RUNNING，再去创建流对象 self._stream，
+        # 在这极短时间窗口内，_stream 仍为 None，response_list 也为空，
+        # 如果直接抛错会导致前端看到“流对象不存在，请先调用 run() 方法”。
+        #
+        # 为了避免这种“点得太快”的错误，这里增加一个短暂等待逻辑，
+        # 给 run() 一点时间完成流的创建或至少产生首个 response_list。
+        import asyncio
+        max_wait_times = 20  # 最多等待约 2 秒（20 * 0.1s）
+        wait_count = 0
+        while (
+            self._status == SessionStatus.RUNNING
+            and not self._stream
+            and not self.response_list
+            and wait_count < max_wait_times
+        ):
+            await asyncio.sleep(0.1)
+            wait_count += 1
+        
+        # 等待之后重新判断状态
+        if self._status != SessionStatus.RUNNING:
+            # 如果在等待过程中已经结束或出错，走上面的“非 RUNNING”逻辑
+            if self._manager:
+                history_session = self._manager.get_session(self.session_id)
+                if isinstance(history_session, HistorySession):
+                    async for chunk in history_session.get_response():
+                        yield chunk
+                    return
+            for chunk in self.response_list:
+                yield chunk
+            return
+        
+        # 如果仍然既没有流对象也没有任何内容，说明底层还没真正开始返回，
+        # 直接返回即可，相当于一个“空流”，避免抛出误导性错误。
         if not self._stream and not self.response_list:
-            raise RuntimeError("流对象不存在，请先调用 run() 方法")
+            return
         
         # 每个生成器维护自己的位置指针（索引位置）
         current_index = 0

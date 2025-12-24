@@ -13,6 +13,7 @@ from comac_purchase.app.router.supplier import router as supplier_router
 from comac_purchase.app.router.bid import router as bid_router
 from comac_purchase.app.router.gen_tensor_file import router as llm_tool_router
 from comac_purchase.app.router.llm_rename import router as llm_rename_router
+from comac_purchase.app.router.llm_init_check import router as llm_init_check_router
 from comac_purchase.db import init_db
 
 app = FastAPI(
@@ -48,6 +49,7 @@ api_router.include_router(supplier_router)
 api_router.include_router(bid_router)
 api_router.include_router(llm_tool_router)
 api_router.include_router(llm_rename_router)
+api_router.include_router(llm_init_check_router)
 
 # 注册API路由组（/api前缀）
 app.include_router(api_router)

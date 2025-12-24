@@ -11,6 +11,16 @@ export const getBidRecords = (projectId) => {
 }
 
 /**
+ * 更新投标记录（部分字段）
+ * @param {number} projectId - 项目ID
+ * @param {number} supplierId - 供应商ID
+ * @param {object} data - 要更新的字段（同后端 BidRecordUpdateRequest）
+ */
+export const updateBidRecord = (projectId, supplierId, data) => {
+  return api.patch(`/bid/${projectId}/${supplierId}`, data)
+}
+
+/**
  * 创建投标记录（添加供应商）
  * @param {number} projectId - 项目ID
  * @param {string} name - 供应商名称

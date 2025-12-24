@@ -35,7 +35,8 @@ AI初审成功 False, True (null, 默认)
 人工初审（json）
 AI评审 （json）
 AI评审成功 False, True(null, 默认)
-
+AI评审_model_session
+人工评审 (json)
 投标文件入库时间
 
 
