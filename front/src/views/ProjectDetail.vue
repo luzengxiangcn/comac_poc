@@ -402,6 +402,20 @@
                         </div>
                       </div>
                     </div>
+                    <div class="preliminary-row">
+                      <span class="label">投标文件：</span>
+                      <div class="value bid-file-content">
+                        <div v-if="loadingBidFileContent" class="loading">加载中...</div>
+                        <textarea
+                          v-else
+                          :value="bidFileContent"
+                          readonly
+                          rows="10"
+                          class="bid-file-textarea"
+                          placeholder="暂无投标文件内容"
+                        ></textarea>
+                      </div>
+                    </div>
                   </div>
                 </div>
                 <div v-else-if="bidRecords.length" class="empty">
@@ -530,6 +544,8 @@ export default {
     const manualPreliminaryStatus = ref('null')
     const savingPreliminary = ref(false)
     const refreshingSuppliers = ref(false)
+    const bidFileContent = ref('')
+    const loadingBidFileContent = ref(false)
     let supplierRefreshTimer = null
     const tenderDocument = ref('')
     const loadingDocument = ref(false)
@@ -688,7 +704,8 @@ export default {
         const data = await getBidRecords(projectId.value)
         bidRecords.value = Array.isArray(data) ? data : []
         if (bidRecords.value.length && !selectedBidRecord.value) {
-          selectedBidRecord.value = bidRecords.value[0]
+          // 自动选择第一个供应商时，也需要加载其投标文件内容
+          await handleSelectBidRecord(bidRecords.value[0])
         }
       } catch (err) {
         console.error('Failed to fetch bid records:', err)
@@ -810,10 +827,30 @@ export default {
       }
     }
 
-    const handleSelectBidRecord = (bid) => {
+    const fetchBidFileContent = async (bidRecord) => {
+      if (!bidRecord || !bidRecord.bid_document_file_id) {
+        bidFileContent.value = ''
+        return
+      }
+      
+      try {
+        loadingBidFileContent.value = true
+        const data = await getFileContent(bidRecord.bid_document_file_id)
+        bidFileContent.value = data.content || data || ''
+      } catch (err) {
+        console.error('Failed to fetch bid file content:', err)
+        bidFileContent.value = ''
+      } finally {
+        loadingBidFileContent.value = false
+      }
+    }
+
+    const handleSelectBidRecord = async (bid) => {
       selectedBidRecord.value = bid
       // 切换供应商时，输入框默认填当前理由
       manualPreliminaryReason.value = getPreliminaryReason(bid) || ''
+      // 加载投标文件内容
+      await fetchBidFileContent(bid)
       // 初始化状态：优先使用人工初审（preliminary_review），如果没有则使用AI初审（ai_preliminary_review）
       const preliminaryReview = bid.preliminary_review
       if (preliminaryReview) {
@@ -1933,6 +1970,8 @@ export default {
       savingPreliminary,
       handleSavePreliminary,
       refreshingSuppliers,
+      bidFileContent,
+      loadingBidFileContent,
       tenderDocument,
       loadingDocument,
       businessRequirementDocument,
@@ -3047,6 +3086,31 @@ export default {
   background-color: #cbd5e1;
   cursor: not-allowed;
   opacity: 0.6;
+}
+
+.bid-file-content {
+  width: 100%;
+}
+
+.bid-file-textarea {
+  width: 100%;
+  padding: 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  font-size: 14px;
+  font-family: 'Courier New', monospace;
+  resize: vertical;
+  background-color: #f8f9fa;
+  color: var(--text-primary);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+.bid-file-textarea:focus {
+  outline: none;
+  border-color: var(--primary-color);
+  background-color: #fff;
 }
 
 .preliminary-actions {
